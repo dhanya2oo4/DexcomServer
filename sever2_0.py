@@ -222,7 +222,7 @@ def callback():
         if token:
             access_token = token['access_token']
             refresh_token = token.get('refresh_token')
-            print_to_serial("✓ Authentication successful! Access token obtained.")
+            print_to_serial("Authentication successful! Access token obtained.")
             
             # Get initial glucose data
             latest_data = get_glucose_data(access_token)
@@ -230,10 +230,10 @@ def callback():
             
             return "Authorization complete. Check your console for glucose readings."
         else:
-            print_to_serial("✗ Failed to retrieve access token.")
+            print_to_serial("Failed to retrieve access token.")
             return "Failed to retrieve access token."
     else:
-        print_to_serial("✗ No authorization code found in callback URL.")
+        print_to_serial("No authorization code found in callback URL.")
         return "No authorization code found in the URL."
 
 @app.route('/data')
@@ -255,11 +255,11 @@ def display_glucose_data():
     global latest_data
     
     if not latest_data:
-        print_to_serial("⚠ No glucose data available")
+        print_to_serial("No glucose data available")
         return
     
     if 'error' in latest_data:
-        print_to_serial(f"✗ Error fetching glucose data: {latest_data['error']}")
+        print_to_serial(f"Error fetching glucose data: {latest_data['error']}")
         return
     
     if 'egvs' in latest_data and latest_data['egvs']:
@@ -277,15 +277,15 @@ def display_glucose_data():
                 readable_time = system_time
             
             print_to_serial("=" * 50)
-            print_to_serial(f"🩸 GLUCOSE READING")
-            print_to_serial(f"   Value: {glucose_value/18.018} mmol/L")
-            print_to_serial(f"   Time:  {readable_time}")
-            print_to_serial(f"   Total readings: {len(values)}")
+            print_to_serial(f"GLUCOSE READING")
+            print_to_serial(f"Value: {round(glucose_value/18.018, 2)} mmol/L")
+            print_to_serial(f"Time:  {readable_time}")
+            print_to_serial(f"Total readings: {len(values)}")
             print_to_serial("=" * 50)
         else:
-            print_to_serial("⚠ No glucose readings in response")
+            print_to_serial("No glucose readings in response")
     else:
-        print_to_serial("⚠ Unexpected data format received")
+        print_to_serial("Unexpected data format received")
 
 def get_access_token(auth_code):
     payload = {
@@ -302,10 +302,10 @@ def get_access_token(auth_code):
         print_to_serial("Requesting access token...")
         response = requests.post(TOKEN_URL, data=payload, headers=headers)
         response.raise_for_status()
-        print_to_serial("✓ Access token retrieved successfully")
+        print_to_serial("Access token retrieved successfully")
         return response.json()
     except requests.exceptions.RequestException as e:
-        print_to_serial(f"✗ Error getting access token: {e}")
+        print_to_serial(f"Error getting access token: {e}")
         return None
 
 def get_glucose_data(token):
@@ -327,17 +327,17 @@ def get_glucose_data(token):
         print_to_serial("Fetching glucose data from Dexcom API...")
         response = requests.get(DATA_URL, headers=headers, params=params)
         response.raise_for_status()
-        print_to_serial("✓ Glucose data retrieved successfully")
+        print_to_serial("Glucose data retrieved successfully")
         return response.json()
     except requests.exceptions.RequestException as e:
-        print_to_serial(f"✗ Error fetching glucose data: {e}")
+        print_to_serial(f"Error fetching glucose data: {e}")
         return {'error': str(e), 'status_code': getattr(response, 'status_code', 'unknown')}
 
 def refresh_access_token():
     global access_token, refresh_token
     
     if not refresh_token:
-        print_to_serial("✗ No refresh token available. Re-authentication required.")
+        print_to_serial("No refresh token available. Re-authentication required.")
         return False
     
     payload = {
@@ -359,10 +359,10 @@ def refresh_access_token():
         token_data = response.json()
         access_token = token_data['access_token']
         refresh_token = token_data.get('refresh_token', refresh_token)
-        print_to_serial("✓ Access token refreshed successfully")
+        print_to_serial("Access token refreshed successfully")
         return True
     except Exception as e:
-        print_to_serial(f"✗ Error refreshing token: {e}")
+        print_to_serial(f"Error refreshing token: {e}")
         access_token = None
         return False
 
@@ -370,7 +370,7 @@ def background_monitor():
     """Background thread to monitor glucose every 5 minutes"""
     global access_token, refresh_token, latest_data
     
-    print_to_serial("🔄 Background glucose monitor started")
+    print_to_serial("Background glucose monitor started")
     print_to_serial("   Updates every 5 minutes")
     
     while True:
@@ -382,11 +382,11 @@ def background_monitor():
                 # Check if token expired
                 if isinstance(latest_data, dict) and 'error' in latest_data:
                     if 'status_code' in latest_data and latest_data['status_code'] == 401:
-                        print_to_serial("🔑 Token expired, attempting refresh...")
+                        print_to_serial("Token expired, attempting refresh...")
                         if refresh_access_token():
                             latest_data = get_glucose_data(access_token)
                         else:
-                            print_to_serial("✗ Token refresh failed. Please restart and re-authenticate.")
+                            print_to_serial("Token refresh failed. Please restart and re-authenticate.")
                             time.sleep(30)
                             continue
                 
@@ -394,16 +394,16 @@ def background_monitor():
                 display_glucose_data()
                 
             except Exception as e:
-                print_to_serial(f"✗ Background monitor error: {e}")
+                print_to_serial(f"Background monitor error: {e}")
         else:
-            print_to_serial("⏳ Waiting for authentication...")
+            print_to_serial("Waiting for authentication...")
         
         # Wait 5 minutes (300 seconds) before next update
-        print_to_serial("⏰ Next update in 5 minutes...")
+        print_to_serial("Next update in 5 minutes...")
         time.sleep(30)
 
 if __name__ == '__main__':
-    print_to_serial("🚀 Starting Dexcom Glucose Monitor")
+    print_to_serial("    Starting Dexcom Glucose Monitor")
     print_to_serial(f"   Server: http://localhost:5000")
     print_to_serial(f"   Update interval: 5 minutes")
     print_to_serial("-" * 50)
@@ -416,5 +416,5 @@ if __name__ == '__main__':
     threading.Timer(1, open_browser).start()
     
     # Start Flask server
-    print_to_serial("🌐 Flask server starting...")
+    print_to_serial("Flask server starting...")
     app.run(port=5000, debug=False)
