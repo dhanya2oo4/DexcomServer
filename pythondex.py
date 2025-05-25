@@ -51,7 +51,7 @@ def continuous_monitor():
         print_to_serial("Authenticating with Dexcom...")
         
 
-        dexcom = Dexcom(username=DEXCOM_USERNAME, password=DEXCOM_PASSWORD, region = 'jp')
+        dexcom = Dexcom(username=DEXCOM_USERNAME, password=DEXCOM_PASSWORD, region = 'apac')
         
         print_to_serial("Authentication successful!")
         # Start continuous monitoring
@@ -63,7 +63,6 @@ def continuous_monitor():
             # Display current glucose data
             display_glucose_data(dexcom)
             print_to_serial("Next update in 5 minutes...")
-            print_to_serial("")  # Empty line for readability
             
             # Wait 5 minutes
             time.sleep(300)  # 300 seconds = 5 minutes
@@ -90,7 +89,7 @@ def enhanced_monitor():
         for attempt in range(max_retries):
             try:
                 print_to_serial(f"Authentication attempt {attempt + 1}/{max_retries}...")
-                dexcom = Dexcom(username=DEXCOM_USERNAME, password=DEXCOM_PASSWORD, region='jp')
+                dexcom = Dexcom(username=DEXCOM_USERNAME, password=DEXCOM_PASSWORD, region='apac')
                 print_to_serial("Authentication successful!")
                 break
             except Exception as e:
@@ -120,7 +119,7 @@ def enhanced_monitor():
                     print_to_serial(f"Too many consecutive errors ({consecutive_errors})")
                     print_to_serial("Attempting to re-authenticate...")
                     try:
-                        dexcom = Dexcom(username = DEXCOM_USERNAME, password = DEXCOM_PASSWORD, region = 'jp')
+                        dexcom = Dexcom(username = DEXCOM_USERNAME, password = DEXCOM_PASSWORD, region = 'apac')
                         print_to_serial("Re-authentication successful!")
                         consecutive_errors = 0
                     except Exception as auth_error:
