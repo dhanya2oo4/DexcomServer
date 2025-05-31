@@ -1,54 +1,73 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import requests
-import webbrowser
 import threading
 import time
 import datetime
 from dotenv import load_dotenv
 import os
+import json
 
 app = Flask(__name__)
 load_dotenv()
 
-# Package into a library (lib structure, clean interface of functions that can be called, get setup.py structure)
-
-# Global parameters
+# Global parameters - UPDATE THESE FOR RENDER
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-REDIRECT_URI = 'http://localhost:5000/callback'
-AUTH_URL = 'https://api.dexcom.jp/v2/oauth2/login'
-TOKEN_URL = 'https://api.dexcom.jp/v2/oauth2/token'
-DATA_URL = 'https://api.dexcom.jp/v3/users/self/egvs'
+# Change to render url
+REDIRECT_URI = os.getenv("REDIRECT_URI", 'https://your-app-name.onrender.com/callback')
 
-# Store tokens
+# actl urls
+AUTH_URL = 'https://api.dexcom.com/v2/oauth2/login'  
+TOKEN_URL = 'https://api.dexcom.com/v2/oauth2/token'  
+DATA_URL = 'https://api.dexcom.com/v2/users/self/egvs'  
+
+# Store tokens and data
 access_token = None
 refresh_token = None
 latest_data = None
+last_update = None
 
 def print_to_serial(message):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {message}")
-
-def open_browser():
-    params = {
-        'client_id': CLIENT_ID,
-        'redirect_uri': REDIRECT_URI,
-        'response_type': 'code',
-        'scope': 'offline_access'
-    }
-    url = AUTH_URL + '?' + requests.compat.urlencode(params)
-    print_to_serial("Opening browser for Dexcom authentication...")
-    webbrowser.open(url)
+    #log to a file for debugging on Render
+    try:
+        with open('/tmp/glucose_log.txt', 'a') as f:
+            f.write(f"[{timestamp}] {message}\n")
+    except:
+        pass
 
 @app.route('/')
 def home():
-    return "Server is running. Please complete Dexcom login."
+    if access_token:
+        return f"""
+        <h2>Dexcom Glucose Monitor</h2>
+        <p>Status: Authenticated</p>
+        <p>Last update: {last_update or 'Never'}</p>
+        <p><a href="/data">View Current Data</a></p>
+        <p><a href="/api/glucose">API Endpoint for ESP32</a></p>
+        """
+    else:
+        params = {
+            'client_id': CLIENT_ID,
+            'redirect_uri': REDIRECT_URI,
+            'response_type': 'code',
+            'scope': 'offline_access'
+        }
+        auth_url = AUTH_URL + '?' + requests.compat.urlencode(params)
+        return f"""
+        <h2>Dexcom Glucose Monitor</h2>
+        <p>Status: Not authenticated</p>
+        <p><a href="{auth_url}" target="_blank">Click here to authenticate with Dexcom</a></p>
+        <p>After authentication, you'll be redirected back here.</p>
+        """
 
 @app.route('/callback')
 def callback():
-    global access_token, refresh_token, latest_data
+    #OAuth callback
+    global access_token, refresh_token, latest_data, last_update
     auth_code = request.args.get('code')
-    print_to_serial(f"Received authorization code: {auth_code[:10]}...")
+    print_to_serial(f"Received authorization code: {auth_code[:10] if auth_code else 'None'}...")
     
     if auth_code:
         token = get_access_token(auth_code)
@@ -59,46 +78,94 @@ def callback():
             
             # Get initial glucose data
             latest_data = get_glucose_data(access_token)
+            last_update = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             display_glucose_data()
             
-            return "Authorization complete. Check your console for glucose readings."
+            return """
+            <h2>Authentication Complete!</h2>
+            <p>Your Dexcom account is now connected.</p>
+            <p>The app will automatically fetch glucose data every 5 minutes.</p>
+            <p><a href="/">Return to Home</a></p>
+            <p><a href="/api/glucose">API Endpoint for ESP32</a></p>
+            """
         else:
             print_to_serial("Failed to retrieve access token.")
-            return "Failed to retrieve access token."
+            return "<h2>Authentication Failed </h2><p>Failed to retrieve access token.</p><p><a href='/'>Try Again</a></p>"
     else:
         print_to_serial("No authorization code found in callback URL.")
-        return "No authorization code found in the URL."
+        return "<h2>Authentication Failed </h2><p>No authorization code found.</p><p><a href='/'>Try Again</a></p>"
 
 @app.route('/data')
 def show_glucose_data():
-    global latest_data
+    global latest_data, last_update
     if not access_token:
-        return "Not authenticated. Restart and log in."
-    if not latest_data:
-        return "No data available."
+        return "<h2>Not Authenticated</h2><p><a href='/'>Go to Home to authenticate</a></p>"
     
-    if 'records' in latest_data and latest_data['records']:
-        records = latest_data['records']
-        if records:
-            # Sort by timestamp to get the latest reading
-            sorted_records = sorted(records, key=lambda x: x.get('systemTime', ''))
-            latest_reading = sorted_records[-1]
-            print(latest_reading)
-            return f"Glucose: {latest_reading['value']} mg/dL at {latest_reading['systemTime']}"
-        else:
-            return "No glucose readings available"
-    # Legacy format support
-    elif 'egvs' in latest_data and latest_data['egvs']:
+    if not latest_data:
+        return "<h2>No Data Available</h2><p>Waiting for first glucose reading</p>"
+    
+    if 'egvs' in latest_data and latest_data['egvs']:
         values = latest_data['egvs']
         latest_reading = values[-1]
-        return f"Glucose: {latest_reading['value']} mg/dL at {latest_reading['systemTime']}"
+        glucose_mg = latest_reading['value']
+        glucose_mmol = round(glucose_mg / 18.018, 1)
+        timestamp = latest_reading['systemTime']
+        
+        try:
+            dt = datetime.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            readable_time = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+        except:
+            readable_time = timestamp
+            
+        return f"""
+        <h2>Latest Glucose Reading</h2>
+        <p><strong>Glucose:</strong> {glucose_mmol} mmol/L ({glucose_mg} mg/dL)</p>
+        <p><strong>Time:</strong> {readable_time}</p>
+        <p><strong>Last Update:</strong> {last_update}</p>
+        <p><strong>Total Readings:</strong> {len(values)}</p>
+        <p><a href="/api/glucose">JSON API for ESP32</a></p>
+        <p><a href="/">Back to Home</a></p>
+        """
     
-    return f"No readings found. Response: {latest_data}"
+    return f"<h2>Error</h2><p>{latest_data}</p>"
 
-def display_glucose_data():
-    """Display glucose data on serial monitor"""
+@app.route('/api/glucose')
+def api_glucose():
+    if not access_token:
+        return jsonify({'error': 'Not authenticated', 'status': 'error'}), 401
+    
+    if not latest_data:
+        return jsonify({'error': 'No data available', 'status': 'waiting'}), 202
+    
+    if 'egvs' in latest_data and latest_data['egvs']:
+        values = latest_data['egvs']
+        latest_reading = values[-1]
+        glucose_mg = latest_reading['value']
+        glucose_mmol = round(glucose_mg / 18.018, 2)
+        timestamp = latest_reading['systemTime']
+        
+        return jsonify({
+            'status': 'success',
+            'glucose_mmol': glucose_mmol,
+            'glucose_mg': glucose_mg,
+            'timestamp': timestamp,
+            'last_update': last_update,
+            'total_readings': len(values)
+        })
+    
+    return jsonify({'error': 'Invalid data format', 'status': 'error'}), 500
+
+@app.route('/health')
+def health_check():
+    return jsonify({
+        'status': 'healthy',
+        'authenticated': bool(access_token),
+        'last_update': last_update,
+        'timestamp': datetime.datetime.now().isoformat()
+    })
+
+def display_glucose_data(): #display in render logs
     global latest_data
-    print(latest_data)
     if not latest_data:
         print_to_serial("No glucose data available")
         return
@@ -106,49 +173,23 @@ def display_glucose_data():
     if 'error' in latest_data:
         print_to_serial(f"Error fetching glucose data: {latest_data['error']}")
         return
-    if 'records' in latest_data:
-        records = latest_data['records']
-        if records and len(records) > 0:
-            # Sort by timestamp to get the latest reading
-            sorted_records = sorted(records, key=lambda x: x.get('systemTime', ''))
-            latest_reading = sorted_records[-1]
-            
-            glucose_value = latest_reading['value']
-            system_time = latest_reading['systemTime']
-            
-            # Convert system time to readable format
-            try:
-                dt = datetime.datetime.fromisoformat(system_time.replace('Z', '+00:00'))
-                readable_time = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-            except:
-                readable_time = system_time
-            
-            print_to_serial("=" * 50)
-            print_to_serial(f"GLUCOSE READING")
-            print_to_serial(f"Value: {glucose_value} mg/dL ({round(glucose_value/18.018, 2)} mmol/L)")
-            print_to_serial(f"Time:  {readable_time}")
-            print_to_serial(f"Total readings: {len(records)}")
-            print_to_serial("=" * 50)
-        else:
-            print_to_serial("No glucose readings available in the requested time range")
     
-    elif 'egvs' in latest_data and latest_data['egvs']:
+    if 'egvs' in latest_data and latest_data['egvs']:
         values = latest_data['egvs']
         if values:
             latest_reading = values[-1]
             glucose_value = latest_reading['value']
             system_time = latest_reading['systemTime']
             
-            # Convert system time to readable format
             try:
-                dt = datetime.datetime.fromisoformat(system_time.replace('Z', '+00:00'))
+                dt = datetime.datetime.fromisoformat(system_time.replace('Z', '+08:00'))
                 readable_time = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
             except:
                 readable_time = system_time
             
             print_to_serial("=" * 50)
             print_to_serial(f"GLUCOSE READING")
-            print_to_serial(f"Value: {glucose_value} mg/dL ({round(glucose_value/18.018, 2)} mmol/L)")
+            print_to_serial(f"Value: {round(glucose_value/18.018, 2)} mmol/L")
             print_to_serial(f"Time:  {readable_time}")
             print_to_serial(f"Total readings: {len(values)}")
             print_to_serial("=" * 50)
@@ -156,7 +197,6 @@ def display_glucose_data():
             print_to_serial("No glucose readings in response")
     else:
         print_to_serial("Unexpected data format received")
-        print_to_serial(f"Response data: {latest_data}")
 
 def get_access_token(auth_code):
     payload = {
@@ -238,9 +278,9 @@ def refresh_access_token():
         return False
 
 def background_monitor():
-    global access_token, refresh_token, latest_data
+    global access_token, refresh_token, latest_data, last_update
     print_to_serial("Background glucose monitor started")
-    print_to_serial("   Updates every 5 minutes")
+    print_to_serial("Updates every 5 minutes")
     
     while True:
         if access_token:
@@ -250,16 +290,17 @@ def background_monitor():
                 
                 # Check if token expired
                 if isinstance(latest_data, dict) and 'error' in latest_data:
-                    if 'status_code' in latest_data and latest_data['status_code'] == 401:
+                    if 'status_code' in latest_data and str(latest_data['status_code']) == '401':
                         print_to_serial("Token expired, attempting refresh...")
                         if refresh_access_token():
                             latest_data = get_glucose_data(access_token)
                         else:
-                            print_to_serial("Token refresh failed. Please restart and re-authenticate.")
+                            print_to_serial("Token refresh failed. Re-authentication required.")
                             time.sleep(300)
                             continue
                 
-                # Display the glucose data
+                # Update timestamp and display data
+                last_update = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 display_glucose_data()
                 
             except Exception as e:
@@ -272,18 +313,17 @@ def background_monitor():
         time.sleep(300)
 
 if __name__ == '__main__':
-    print_to_serial("    Starting Dexcom Glucose Monitor")
-    print_to_serial(f"   Server: http://localhost:5000")
-    print_to_serial(f"   Update interval: 5 minutes")
+    print_to_serial("Starting Dexcom Glucose Monitor for Render")
+    print_to_serial("Update interval: 5 minutes")
     print_to_serial("-" * 50)
     
     # Start background monitoring thread
     monitor_thread = threading.Thread(target=background_monitor, daemon=True)
     monitor_thread.start()
     
-    # Open browser after 1 second delay
-    threading.Timer(1, open_browser).start()
+    # Get port from environment (Render requirement)
+    port = int(os.environ.get('PORT', 5000))
     
     # Start Flask server
-    print_to_serial("Flask server starting...")
-    app.run(port=5000, debug=False)
+    print_to_serial(f"Flask server starting on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False)
