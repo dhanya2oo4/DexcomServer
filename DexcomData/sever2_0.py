@@ -118,7 +118,7 @@ def display_glucose_data():
             
             # Convert system time to readable format
             try:
-                dt = datetime.datetime.fromisoformat(system_time.replace('Z', '+00:00'))
+                dt = datetime.datetime.fromisoformat(system_time.replace('Z', '+08:00'))
                 readable_time = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
             except:
                 readable_time = system_time
@@ -141,7 +141,7 @@ def display_glucose_data():
             
             # Convert system time to readable format
             try:
-                dt = datetime.datetime.fromisoformat(system_time.replace('Z', '+00:00'))
+                dt = datetime.datetime.fromisoformat(system_time.replace('Z', '+08:00'))
                 readable_time = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
             except:
                 readable_time = system_time
@@ -185,9 +185,8 @@ def get_glucose_data(token):
         'Content-Type': 'application/json'
     }
 
-    # Get data from the last 6 hours to ensure we have recent readings
     end_time = datetime.datetime.now(datetime.timezone.utc)
-    start_time = end_time - datetime.timedelta(hours=6)
+    start_time = end_time - datetime.timedelta(hours=24)
     
     params = {
         'startDate': start_time.strftime('%Y-%m-%dT%H:%M:%S'),

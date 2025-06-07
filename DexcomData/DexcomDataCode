@@ -1,0 +1,290 @@
+import datetime
+import requests
+import webbrowser
+import threading
+import time
+from typing import Callable, Optional, Dict, Any
+import datetime
+
+def format_glucose_reading(reading: Dict[str, Any]) -> str:
+    """Format glucose reading for display"""
+    if not reading:
+        return "No reading available"
+    
+    value = reading.get('value', 0)
+    system_time = reading.get('systemTime', '')
+    
+    # Convert to mmol/L
+    mmol_value = round(value / 18.018, 2)
+    
+    # Format timestamp
+    try:
+        dt = datetime.datetime.fromisoformat(system_time.replace('Z', '+00:00'))
+        formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    except:
+        formatted_time = system_time
+    
+    return f"Glucose: {value} mg/dL ({mmol_value} mmol/L) at {formatted_time}"
+
+
+def mg_dl_to_mmol_l(mg_dl: float) -> float:
+    """Convert mg/dL to mmol/L"""
+    return round(mg_dl / 18.018, 2)
+
+class DexcomAuth:
+    """Handle Dexcom API authentication"""
+    
+    def __init__(self, client_id: str, client_secret: str, 
+                 redirect_uri: str = 'http://localhost:5000/callback',
+                 base_url: str = 'https://api.dexcom.jp/v2'):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.redirect_uri = redirect_uri
+        self.auth_url = f'{base_url}/oauth2/login'
+        self.token_url = f'{base_url}/oauth2/token'
+        
+        self.access_token: Optional[str] = None
+        self.refresh_token: Optional[str] = None
+    
+    def get_auth_url(self) -> str:
+        params = {
+            'client_id': self.client_id,
+            'redirect_uri': self.redirect_uri,
+            'response_type': 'code',
+            'scope': 'offline_access'
+        }
+        return self.auth_url + '?' + requests.compat.urlencode(params)
+    
+    def open_browser_auth(self) -> None:
+        url = self.get_auth_url()
+        print("Opening browser for Dexcom authentication...")
+        webbrowser.open(url)
+    
+    def exchange_code_for_tokens(self, auth_code: str) -> bool:
+        """Exchange authorization code for access tokens"""
+        payload = {
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'code': auth_code,
+            'grant_type': 'authorization_code',
+            'redirect_uri': self.redirect_uri
+        }
+        
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        
+        try:
+            print("Requesting access token...")
+            response = requests.post(self.token_url, data=payload, headers=headers)
+            response.raise_for_status()
+            token_data = response.json()
+            
+            self.access_token = token_data['access_token']
+            self.refresh_token = token_data.get('refresh_token')
+            
+            print("Access token retrieved successfully")
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting access token: {e}")
+            return False
+    
+    def refresh_access_token(self) -> bool:
+        """Refresh the access token using refresh token"""
+        if not self.refresh_token:
+            print("No refresh token available. Re-authentication required.")
+            return False
+        
+        payload = {
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'grant_type': 'refresh_token',
+            'refresh_token': self.refresh_token,
+            'redirect_uri': self.redirect_uri
+        }
+        
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        
+        try:
+            print("Refreshing access token...")
+            response = requests.post(self.token_url, data=payload, headers=headers)
+            response.raise_for_status()
+            
+            token_data = response.json()
+            self.access_token = token_data['access_token']
+            self.refresh_token = token_data.get('refresh_token', self.refresh_token)
+            
+            print("Access token refreshed successfully")
+            return True
+            
+        except Exception as e:
+            print(f"Error refreshing token: {e}")
+            self.access_token = None
+            return False
+    
+    def is_authenticated(self) -> bool:
+        """Check if currently authenticated"""
+        return self.access_token is not None
+
+
+"""Data retrieval module for Dexcom API"""
+
+class DexcomData:
+    """Handle Dexcom glucose data retrieval"""
+    
+    def __init__(self, base_url: str = 'https://api.dexcom.jp/v3'):
+        self.data_url = f'{base_url}/users/self/egvs'
+    
+    def get_glucose_data(self, access_token: str, 
+                        hours_back: int = 6) -> Dict[str, Any]:
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        end_time = datetime.datetime.now(datetime.timezone.utc)
+        start_time = end_time - datetime.timedelta(hours=hours_back)
+        
+        params = {
+            'startDate': start_time.strftime('%Y-%m-%dT%H:%M:%S'),
+            'endDate': end_time.strftime('%Y-%m-%dT%H:%M:%S')
+        }
+        
+        try:
+            print(f"Fetching glucose data from last {hours_back} hours...")
+            response = requests.get(self.data_url, headers=headers, params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            record_count = len(data.get('records', []))
+            print(f"Retrieved {record_count} glucose readings")
+            
+            return data
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching glucose data: {e}")
+            return {
+                'error': str(e), 
+                'status_code': getattr(response, 'status_code', 'unknown'),
+                'records': []
+            }
+    
+    def get_latest_reading(self, access_token: str) -> Optional[Dict[str, Any]]:
+        """Get the most recent glucose reading"""
+        data = self.get_glucose_data(access_token, hours_back=6)
+        
+        if 'records' in data and data['records']:
+            records = data['records']
+            # Sort by timestamp to get the latest
+            sorted_records = sorted(records, key=lambda x: x.get('systemTime', ''))
+            return sorted_records[-1] if sorted_records else None
+        
+        return None
+    
+    def debug_data_availability(self, access_token: str) -> Dict[str, Any]:
+        """Debug function to test different time ranges"""
+        results = {}
+        time_ranges = [
+            ("1 hour", 1),
+            ("6 hours", 6), 
+            ("24 hours", 24),
+            ("7 days", 168),
+            ("30 days", 720)
+        ]
+        
+        for range_name, hours in time_ranges:
+            print(f"Testing {range_name} range...")
+            data = self.get_glucose_data(access_token, hours_back=hours)
+            record_count = len(data.get('records', []))
+            results[range_name] = {
+                'hours': hours,
+                'record_count': record_count,
+                'has_data': record_count > 0
+            }
+            print(f"{range_name}: {record_count} records")
+        
+        return results
+
+
+# dexcom_monitor/monitor.py
+"""Continuous monitoring module"""
+
+class DexcomMonitor:
+    """Continuous glucose monitoring"""
+    
+    def __init__(self, auth: DexcomAuth, data: DexcomData, 
+                 update_interval: int = 300):  # 5 minutes default
+        self.auth = auth
+        self.data = data
+        self.update_interval = update_interval
+        self.running = False
+        self.monitor_thread: Optional[threading.Thread] = None
+        self.callback: Optional[Callable] = None
+        self.latest_reading: Optional[Dict[str, Any]] = None
+    
+    def set_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
+        """Set callback function for new readings"""
+        self.callback = callback
+    
+    def start_monitoring(self) -> bool:
+        """Start continuous monitoring"""
+        if not self.auth.is_authenticated():
+            print("Not authenticated. Cannot start monitoring.")
+            return False
+        
+        if self.running:
+            print("Monitoring already running.")
+            return False
+        
+        self.running = True
+        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.monitor_thread.start()
+        
+        print(f"Started glucose monitoring (updates every {self.update_interval//60} minutes)")
+        return True
+    
+    def stop_monitoring(self) -> None:
+        """Stop continuous monitoring"""
+        self.running = False
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=5)
+        print("Stopped glucose monitoring")
+    
+    def _monitor_loop(self) -> None:
+        """Main monitoring loop"""
+        while self.running:
+            try:
+                if not self.auth.is_authenticated():
+                    print("Authentication lost. Stopping monitor.")
+                    break
+                
+                # Get latest reading
+                reading = self.data.get_latest_reading(self.auth.access_token)
+                
+                # Handle token refresh if needed
+                if reading is None:
+                    print("No data received, attempting token refresh...")
+                    if self.auth.refresh_access_token():
+                        reading = self.data.get_latest_reading(self.auth.access_token)
+                
+                if reading:
+                    self.latest_reading = reading
+                    print(format_glucose_reading(reading))
+                    
+                    # Call user callback if set
+                    if self.callback:
+                        try:
+                            self.callback(reading)
+                        except Exception as e:
+                            print(f"Callback error: {e}")
+                else:
+                    print("No glucose reading available")
+                
+            except Exception as e:
+                print(f"Monitor error: {e}")
+            
+            # Wait for next update
+            time.sleep(self.update_interval)
+    
+    def get_current_reading(self) -> Optional[Dict[str, Any]]:
+        """Get the most recent reading from cache"""
+        return self.latest_reading
